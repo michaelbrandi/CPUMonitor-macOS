@@ -75,7 +75,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
 
     // CPU tracking state
     private var highCPUStart: [pid_t: TimeInterval] = [:]
-    private var alertedPIDs: [pid_t: String] = [:]  // PID -> notification identifier
+    private var alertedPIDs: Set<pid_t> = []
     private var previousSample: [pid_t: (cpuNs: UInt64, wallNs: UInt64)] = [:]
 
     // MARK: Lifecycle
@@ -170,9 +170,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
                     highCPUStart[pid] = mono
                 } else if let start = highCPUStart[pid],
                           mono - start >= durationThreshold,
-                          alertedPIDs[pid] == nil {
-                    let notifID = sendNotification(name: current.name, pid: pid, cpu: cpuPercent)
-                    alertedPIDs[pid] = notifID
+                          !alertedPIDs.contains(pid) {
+                    sendNotification(name: current.name, pid: pid, cpu: cpuPercent)
+                    alertedPIDs.insert(pid)
                 }
             }
         }
@@ -190,9 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         // Cleanup PIDs that dropped below threshold
         for pid in Set(highCPUStart.keys).subtracting(currentHighPIDs) {
             highCPUStart.removeValue(forKey: pid)
-            if let notifID = alertedPIDs.removeValue(forKey: pid) {
-                UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: [notifID])
-            }
+            alertedPIDs.remove(pid)
         }
 
         // Update tray icon
@@ -216,22 +214,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDele
         center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    @discardableResult
-    private func sendNotification(name: String, pid: pid_t, cpu: Double) -> String {
+    private func sendNotification(name: String, pid: pid_t, cpu: Double) {
         let content = UNMutableNotificationContent()
         content.title = "High CPU Usage"
         content.subtitle = "\(name) (PID \(pid))"
         content.body = "Has been using \(Int(cpu))% CPU for over \(Int(durationThreshold))s"
         content.sound = .default
 
-        let identifier = "cpu-\(pid)"
         let request = UNNotificationRequest(
-            identifier: identifier,
+            identifier: "cpu-\(pid)-\(Date().timeIntervalSince1970)",
             content: content,
             trigger: nil
         )
         UNUserNotificationCenter.current().add(request)
-        return identifier
     }
 
     // Show notification banner even when the app is in the foreground
